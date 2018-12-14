@@ -360,8 +360,11 @@ contract RootChain {
 
         uint192 exitId = getStandardExitId(_outputId);
 
-        // Check that the challenging tx is signed by the output's owner.
+        // Check if exit exists.
+        // Also check if we are not comparing ecrecover output with zero address.
         address owner = exits[exitId].owner;
+        require(address(0) != owner);
+        // Check that the challenging tx is signed by the output's owner.
         bytes32 txHash = keccak256(_challengeTx);
         require(owner == ECRecovery.recover(txHash, _challengeTxSig));
 
