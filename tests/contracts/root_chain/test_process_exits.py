@@ -155,8 +155,10 @@ def test_finalize_exits_partial_queue_processing(testlang):
     spend_id_2 = testlang.spend_utxo([deposit_id_2], [owner.key], [(owner.address, NULL_ADDRESS, 100)])
     testlang.start_standard_exit(spend_id_2, owner.key)
 
+    exit_id_1 = testlang.get_standard_exit_id(spend_id_1)
+
     testlang.forward_timestamp(2 * WEEK + 1)
-    testlang.process_exits(NULL_ADDRESS, spend_id_1, 1)
+    testlang.process_exits(NULL_ADDRESS, exit_id_1, 1)
     plasma_exit = testlang.get_standard_exit(spend_id_1)
     assert plasma_exit.owner == NULL_ADDRESS_HEX
     plasma_exit = testlang.get_standard_exit(spend_id_2)
@@ -174,9 +176,9 @@ def test_finalize_exits_tx_race_short_circuit(testlang):
     testlang.start_standard_exit(utxo4.spend_id, utxo4.owner.key)
 
     testlang.forward_timestamp(2 * WEEK + 1)
-    testlang.process_exits(NULL_ADDRESS, utxo1.spend_id, 1)
+    testlang.process_exits(NULL_ADDRESS, testlang.get_standard_exit_id(utxo1.spend_id), 1)
     with pytest.raises(TransactionFailed):
-        testlang.process_exits(NULL_ADDRESS, utxo1.spend_id, 3, startgas=1000000)
+        testlang.process_exits(NULL_ADDRESS, testlang.get_standard_exit_id(utxo1.spend_id), 3, startgas=1000000)
     short_circuit_gas = testlang.ethtester.chain.last_gas_used()
     assert short_circuit_gas < 67291  # value from _tx_race_normal
 
@@ -192,9 +194,10 @@ def test_finalize_exits_tx_race_normal(testlang):
     testlang.start_standard_exit(utxo4.spend_id, utxo4.owner.key)
 
     testlang.forward_timestamp(2 * WEEK + 1)
-    testlang.process_exits(NULL_ADDRESS, utxo1.spend_id, 1)
+    testlang.process_exits(NULL_ADDRESS, testlang.get_standard_exit_id(utxo1.spend_id), 1)
+    testlang.forward_timestamp(2 * WEEK + 1)
 
-    testlang.process_exits(NULL_ADDRESS, utxo2.spend_id, 3)
+    testlang.process_exits(NULL_ADDRESS, testlang.get_standard_exit_id(utxo2.spend_id), 3)
     three_exits_tx_gas = testlang.ethtester.chain.last_gas_used()
     assert three_exits_tx_gas > 3516  # value from _tx_race_short_circuit
 
@@ -207,10 +210,10 @@ def test_finalize_exits_empty_queue_should_crash(testlang, ethtester):
     testlang.start_standard_exit(spend_id_1, owner.key)
 
     testlang.forward_timestamp(2 * WEEK + 1)
-    testlang.process_exits(NULL_ADDRESS, spend_id_1, 1)
+    testlang.process_exits(NULL_ADDRESS, testlang.get_standard_exit_id(spend_id_1), 1)
 
     with pytest.raises(TransactionFailed):
-        testlang.process_exits(NULL_ADDRESS, spend_id_1, 1)
+        testlang.process_exits(NULL_ADDRESS, testlang.get_standard_exit_id(spend_id_1), 1)
     with pytest.raises(TransactionFailed):
         testlang.process_exits(NULL_ADDRESS, 0, 1)
 
@@ -248,7 +251,7 @@ def test_finalize_challenged_exit_will_not_send_funds(testlang):
     assert post_balance == pre_balance
 
 
-def test_finalized_exit_challenge_will_fail(testlang):
+def test_finalize_exit_challenge_of_finalized_will_fail(testlang):
     owner, amount = testlang.accounts[0], 100
     deposit_id = testlang.deposit(owner, amount)
     spend_id = testlang.spend_utxo([deposit_id], [owner.key], [(owner.address, NULL_ADDRESS, amount)])
@@ -256,7 +259,7 @@ def test_finalized_exit_challenge_will_fail(testlang):
     testlang.start_standard_exit(spend_id, owner.key)
     testlang.forward_timestamp(2 * WEEK + 1)
 
-    testlang.process_exits(NULL_ADDRESS, spend_id, 100)
+    testlang.process_exits(NULL_ADDRESS, testlang.get_standard_exit_id(spend_id), 100)
     standard_exit = testlang.get_standard_exit(spend_id)
     assert standard_exit.owner == NULL_ADDRESS_HEX
     doublespend_id = testlang.spend_utxo([spend_id], [owner.key], [(owner.address, NULL_ADDRESS, 100)])
@@ -264,7 +267,7 @@ def test_finalized_exit_challenge_will_fail(testlang):
         testlang.challenge_standard_exit(spend_id, doublespend_id)
 
 
-def test_finalize_for_in_flight_exit_should_transfer_funds(testlang):
+def test_finalize_exits_for_in_flight_exit_should_transfer_funds(testlang):
     owner, amount = testlang.accounts[0], 100
     first_utxo = 100 - 33
     deposit_id = testlang.deposit(owner, amount)
@@ -305,17 +308,34 @@ def test_finalize_exits_priority_for_in_flight_exits_corresponds_to_the_age_of_y
 
     testlang.forward_timestamp(2 * WEEK + 1)
 
-    balance = testlang.get_balance(owner)
-    testlang.process_exits(NULL_ADDRESS, 0, 1)
-    assert testlang.get_balance(owner) == balance + 30 + testlang.root_chain.standardExitBond()
+    three_exits_tx_gas = testlang.ethtester.chain.last_gas_used()
 
     balance = testlang.get_balance(owner)
+    ts, exit_id, inflight = testlang.root_chain.getNextExit(NULL_ADDRESS)
+    print("ts: {}, exit_id: {}, inflight: {}".format(ts, hex(exit_id), inflight))
+    a1, a2, a3, a4 = testlang.root_chain.exits(exit_id)
+    print("owner: {}, token: {}, amount: {}, pos: {}".format(a1, a2, a3, a4))
+
+    # problem: bad test setup - IFE input is first SE; thus that exit is empty
+
     testlang.process_exits(NULL_ADDRESS, 0, 1)
-    assert testlang.get_balance(owner) == balance + 70 + testlang.root_chain.inFlightExitBond() + testlang.root_chain.piggybackBond()
+    # assert testlang.get_balance(owner) == balance + 30 + testlang.root_chain.standardExitBond()
 
     balance = testlang.get_balance(owner)
+    ts, exit_id, inflight = testlang.root_chain.getNextExit(NULL_ADDRESS)
+    print("ts: {}, exit_id: {}, inflight: {}".format(ts, hex(exit_id), inflight))
     testlang.process_exits(NULL_ADDRESS, 0, 1)
-    assert testlang.get_balance(owner) == balance + 100 + testlang.root_chain.standardExitBond()
+    # assert testlang.get_balance(owner) == balance + 70 + testlang.root_chain.inFlightExitBond() + testlang.root_chain.piggybackBond()
+
+    balance = testlang.get_balance(owner)
+    ts, exit_id, inflight = testlang.root_chain.getNextExit(NULL_ADDRESS)
+    print("ts: {}, exit_id: {}, inflight: {}".format(ts, hex(exit_id), inflight))
+    owner, token, amount, position = testlang.root_chain.exits(exit_id)
+    print("owner: {}, token: {}, amount: {}, pos: {}".format(owner, token, amount, position))
+    testlang.process_exits(NULL_ADDRESS, 0, 1)
+    # assert testlang.get_balance(owner) == balance + 100 + testlang.root_chain.standardExitBond()
+
+    assert False
 
 
 # TODO: add test_process_exits_in_flight_for_ERC20_should_succeed

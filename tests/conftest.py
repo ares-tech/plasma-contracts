@@ -9,7 +9,7 @@ from solc_simple import Builder
 from testlang.testlang import TestingLanguage
 
 
-GAS_LIMIT = 8000000
+GAS_LIMIT = 10000000
 START_GAS = GAS_LIMIT - 1000000
 config_metropolis['BLOCK_GAS_LIMIT'] = GAS_LIMIT
 
@@ -64,6 +64,9 @@ def get_contract(ethtester, ethutils):
 @pytest.fixture
 def root_chain(ethtester, get_contract):
     contract = get_contract('RootChain')
+    # challenge_gas = ethtester.chain.last_gas_used()
+    # print("challenge_gas: {}".format(challenge_gas))
+    # assert False
     ethtester.chain.mine()
     return contract
 
